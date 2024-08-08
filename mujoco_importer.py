@@ -14,6 +14,7 @@ except:
 
 import xml.etree.ElementTree as ET
 import numpy as np
+import os
 
 if True: # transforms.py
     def normalized(vec):
@@ -492,7 +493,7 @@ class BoneInfo:
         return self._is_joint
 
 class JointInfo:
-    JBL = 0.1 # joint bone length
+    JBL = 0.05 # joint bone length
     JBP = "POST" # joint bone is either PRE (before the body pose) or POST (after the body pose)
     ADD_FREEJOINT_BONE = False
     def __init__(self, name, body, body_parent, axis):
@@ -537,11 +538,19 @@ class JointInfo:
         else:
             return o + JointInfo.JBL * v
 
+class MeshGeomInfo:
+    def __init__(self, stl_path):
+        self._stl_path = stl_path
+    
+    def get_stl_path(self):
+        return self._stl_path
+
 class BodyInfo:
     def __init__(self, name, parent, body_in_parent_tf):
         self._name = name
         self._parent = parent
         self._body_in_parent_tf = body_in_parent_tf
+        self._geoms = []
         # infer initial world pose
         tf_parent_in_world = Transform()
         if self._parent is not None:
@@ -566,6 +575,12 @@ class BodyInfo:
         self._end_bone_name = None # not initialized
         self._end_bone_tail = None # not initialized
 
+    def set_joint(self, joint_info):
+        self._joint = joint_info
+
+    def add_mesh_geom(self, mesh_geom_info):
+        self._geoms.append(mesh_geom_info)
+
     def __repr__(self):
         return "BodyInfo(name={}, parent_name={})".format(self._name, self._parent.get_name() if self._parent is not None else "None")
 
@@ -584,8 +599,8 @@ class BodyInfo:
     def get_depth(self):
         return self._depth
     
-    def set_joint(self, joint_info):
-        self._joint = joint_info
+    def get_mesh_geoms(self):
+        return self._geoms
 
     def create_bones(self):
         # bone going from parent joint-end to this body joint-start
@@ -607,11 +622,13 @@ class BodyInfo:
             self._end_bone_name = None
             self._end_bone_tail = own_origin
             return []
-        if not JointInfo.ADD_FREEJOINT_BONE: # parent is worldbody, don't create a bone
+        if not JointInfo.ADD_FREEJOINT_BONE: # parent is worldbody, create a small bone
             if self.get_parent().get_parent() is None: 
-                self._end_bone_name = None
+                self._end_bone_name = "to_" + self.get_name()
                 self._end_bone_tail = own_origin
-                return []
+                bone_head = own_origin - np.array([JointInfo.JBL, 0, 0])
+                parent_to_body_bone = BoneInfo(self._end_bone_name, None, bone_head, self._end_bone_tail, False)
+                return [parent_to_body_bone]
         # check init order
         if self.get_parent()._end_bone_tail is None:
             raise ValueError("Child body's bones should be created after parent body's bones")
@@ -652,6 +669,9 @@ class Scene:
     def get_bodies_in_world_tfs(self):
         return [(b.get_name(), b.get_initial_tf_in_world()) for b in self.bodies]
 
+    def get_all_bodies(self):
+        return self.bodies
+
     def set_joints(self, joints):
         self.joints = joints
 
@@ -675,6 +695,18 @@ class Scene:
 def parse_mujoco_xml(filepath, blenderclass):
     tree = ET.parse(filepath)
     root = tree.getroot()
+
+    # find all mesh files
+    stl_dir = ""
+    for c in root.findall("compiler"):
+        stl_dir = c.get("meshdir", "")
+    stl_dir_full = os.path.join(os.path.dirname(filepath), stl_dir)
+    mesh_files = {}
+    for a in root.findall("asset"):
+        for m in a.findall("mesh"):
+            filename = m.get("file", None)
+            if filename is not None:
+                mesh_files[os.path.splitext(filename)[0]] = os.path.join(stl_dir_full, filename)
 
     joints = []
     bodies = []
@@ -705,6 +737,16 @@ def parse_mujoco_xml(filepath, blenderclass):
             joint_info = JointInfo(joint_name, body_info, parent_body, joint_axis)
             body_info.set_joint(joint_info)
             joints.append(joint_info)
+
+        # add geometries (meshes only for now)
+        for geom in body.findall("geom"):
+            geom_type = geom.get("type", "unknown")
+            geom_class = geom.get("class", "unknown")
+            if geom_type == "mesh" and geom_class == "visual":
+                geom_meshfile = geom.get("mesh", None)
+                if geom_meshfile is not None:
+                    body_info.add_mesh_geom(MeshGeomInfo(mesh_files[os.path.splitext(geom_meshfile)[0]]))
+
 
         for child_body in body.findall("body"):
             process_body(child_body, body_info)
@@ -746,7 +788,7 @@ if BLENDER:
             bone_dict = {}
 
             # Create a custom shape for joint bones (a simple disc)
-            bpy.ops.mesh.primitive_circle_add(vertices=32, radius=0.5, fill_type='NOTHING', location=(0, 0, 0))
+            bpy.ops.mesh.primitive_circle_add(vertices=32, radius=2.0, fill_type='NOTHING', location=(0, 0, 0))
             custom_shape_obj = bpy.context.object
             custom_shape_obj.name = "Joint_Bone_Shape"
 
@@ -761,7 +803,7 @@ if BLENDER:
                 bone.tail = bone_info.tail()
                 if bone_info.parent_bone_name() is not None:
                     bone.parent = bone_dict[bone_info.parent_bone_name()]
-                self.report({'INFO'}, "Created: {} (p: {})".format(bone_info.name(), bone_info.parent_bone_name()))
+                self.report({'INFO'}, "Created Bone: {} (p: {})".format(bone_info.name(), bone_info.parent_bone_name()))
 
                 # Store bone in the dictionary
                 bone_dict[bone_info.name()] = bone
@@ -781,8 +823,28 @@ if BLENDER:
                     pose_bone.custom_shape_rotation_euler = (np.deg2rad(90), 0, 0)  # Align along the Y-axis if needed
                     pose_bone.rotation_mode = 'XYZ'
 
-            # Return to Object Mode
+            # Attach STL meshes to corresponding bones
             bpy.ops.object.mode_set(mode='OBJECT')
+            for body_info in scene.get_all_bodies():
+                for geom_info in body_info.get_mesh_geoms():
+                    bone_name = body_info._end_bone_name
+                    if bone_name is None:
+                        self.report({'WARNING'}, "No bone for body {}".format(body_info.get_name()))
+                        continue
+                    stl_full_path = geom_info.get_stl_path()
+                    if stl_full_path is not None:
+                        if os.path.exists(stl_full_path):
+                            # bpy.ops.import_mesh.stl(filepath=stl_full_path)
+                            bpy.ops.wm.stl_import(filepath=stl_full_path)
+                            imported_mesh = bpy.context.object
+                            imported_mesh.name = body_info.get_name() + "_mesh"
+
+                            # Parent the mesh to the corresponding bone
+                            if bone_name in armature.data.bones:
+                                imported_mesh.parent = armature
+                                imported_mesh.parent_type = 'BONE'
+                                imported_mesh.parent_bone = bone_name
+                                imported_mesh.matrix_world = body_info.get_initial_tf_in_world().matrix().T
 
             return {'FINISHED'}
 
