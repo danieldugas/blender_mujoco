@@ -14,10 +14,6 @@ Import a robot from a MuJoCo `.xml` file into blender.
 - Make sure `.xml` file and all necessary meshes are in correct folder structure (in my case, `unitree_g1.xml`, and meshes in `assets` folder)
 - **File** > **Import** > **MuJoCo XML**
 
-### bone_rotation_exporter
-
-Export animation frames of joint rotations
-
 ### joint_anim_importer
 
 Import animation of mujoco joints
@@ -28,3 +24,7 @@ tested on [this mocap file](https://github.com/danieldugas/DeepMimic_mujoco/blob
 
 - Make sure the MuJoCo armature has been created
 - **Tools** (Right panel, screwdriver/wrench icon) > **Import Animation from JSON**
+
+### joint_anim_exporter
+
+Export animation frames of joint rotations
