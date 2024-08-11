@@ -62,7 +62,8 @@ class ExportJSONAnimationOperator(bpy.types.Operator):
             # Write the JSON data
             animation_data = {
                 "Labels": labels,
-                "Frames": frames
+                "Frames": frames,
+                "Format": "direct_qpos",
             }
 
             with open(filepath, 'w') as file:
