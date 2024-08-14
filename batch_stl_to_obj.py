@@ -48,6 +48,9 @@ names = [
 
 # Filepath to your STL file
 for name in names:
+    # log name
+    print(name)
+
     stl_file_path = "/home/daniel/Code/DeepMimic_mujoco/src/mujoco/humanoid_deepmimic/envs/asset/assets/"+name+".STL"
 
     # Import the STL file
@@ -64,7 +67,7 @@ for name in names:
     bpy.context.view_layer.objects.active = imported_object
 
     # Export the selected object as an OBJ file
-    bpy.ops.wm.obj_export(filepath=obj_file_path)
+    bpy.ops.wm.obj_export(filepath=obj_file_path, up_axis="Z", forward_axis="Y")
 
     # delete the selected object
     bpy.ops.object.delete()
