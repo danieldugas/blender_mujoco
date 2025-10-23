@@ -570,14 +570,14 @@ class BodyInfo:
         self._depth = 0
         if self._parent is not None:
             self._depth = self._parent.get_depth() + 1
-        # joint
-        self._joint = None
+        # joints
+        self._joints = []
         # end bone
         self._end_bone_name = None # not initialized
-        self._end_bone_tail = None # not initialized
+        self._bones_generated = False
 
-    def set_joint(self, joint_info):
-        self._joint = joint_info
+    def add_joint(self, joint_info):
+        self._joints.append(joint_info)
 
     def add_mesh_geom(self, mesh_geom_info):
         self._geoms.append(mesh_geom_info)
@@ -604,61 +604,62 @@ class BodyInfo:
         return self._geoms
 
     def create_bones(self):
-        # bone going from parent joint-end to this body joint-start
-        # bone going from this body joint-start to joint-end
         """
-        (PRE joint bone positioning)
-                (no or free joint)
-                body0
-               +---------------x joint1 bone head
-              /                v
-             /                 + body1 (axis joint)
-            /
-           + 
-           worldbody
-        
+        each body creates one or more bones:
+        - a bone for each joint, at the joint pos, with bone y == joint axis
+        - a bone near it's origin to represent the body
+
+        no attempt is made to have the bones visually connect to one another
         """
+        self._bones_generated = True
+
         own_origin = self.get_initial_tf_in_world().origin() if JointInfo.ADD_FREEJOINT_BONE else self.get_initial_tf_in_armature().origin()
         if self.get_parent() is None: # no bones for worldbody
             self._end_bone_name = None
-            self._end_bone_tail = own_origin
             return []
         if not JointInfo.ADD_FREEJOINT_BONE: # parent is worldbody, create a small bone
             if self.get_parent().get_parent() is None: 
                 self._end_bone_name = "to_" + self.get_name()
-                self._end_bone_tail = own_origin
-                bone_head = own_origin - np.array([JointInfo.JBL, 0, 0])
-                parent_to_body_bone = BoneInfo(self._end_bone_name, None, bone_head, self._end_bone_tail, False)
+                if JointInfo.JBP == "PRE":
+                    bone_tail = own_origin
+                    bone_head = own_origin - np.array([JointInfo.JBL, 0, 0])
+                else:
+                    bone_tail = own_origin + np.array([JointInfo.JBL, 0, 0])
+                    bone_head = own_origin
+                parent_to_body_bone = BoneInfo(self._end_bone_name, None, bone_head, bone_tail, False)
                 return [parent_to_body_bone]
+
         # check init order
-        if self.get_parent()._end_bone_tail is None:
+        if not self.get_parent()._bones_generated:
             raise ValueError("Child body's bones should be created after parent body's bones")
-        # parent end bone
-        parent_end_bone_name = self.get_parent()._end_bone_name
-        parent_end_bone_tail = self.get_parent()._end_bone_tail
-        # create bones
-        if self._joint is None: # single bone, from parent to this body
-            self._end_bone_name = "to_" + self.get_name()
-            self._end_bone_tail = own_origin
-            parent_to_body_bone = BoneInfo(self._end_bone_name, parent_end_bone_name, parent_end_bone_tail, self._end_bone_tail, False)
-            return [parent_to_body_bone]
-        else: # two bones, from parent to joint, from joint to this body
+
+        # Fetch parent bone name for use when creating Armature heiarchy later
+        parent_bone_name = self.get_parent()._end_bone_name
+
+        # Create a bone for each joint aligned with that joint's axis.
+        joint_bones = []
+        for joint_info in self._joints:
             bone1_name = "to_" + self.get_name()
-            jbone_name = self._joint.get_name()
-            jbone_head = self._joint.get_initial_bonehead()
-            jbone_tail = self._joint.get_initial_bonetail()
-            if np.allclose(parent_end_bone_tail, jbone_head):
-                # This body has no translation/rot from parent.
-                # Blender doesn't allow 0 length bones so we must skip it
-                joint_bone = BoneInfo(jbone_name, parent_end_bone_name, parent_end_bone_tail, jbone_tail, True)
-                self._end_bone_name = jbone_name
-                self._end_bone_tail = jbone_tail
-                return [joint_bone]
-            parent_to_joint_bone = BoneInfo(bone1_name, parent_end_bone_name, parent_end_bone_tail, jbone_head, False)
-            joint_bone = BoneInfo(jbone_name, bone1_name, jbone_head, jbone_tail, True)
-            self._end_bone_name = jbone_name
-            self._end_bone_tail = jbone_tail
-            return [parent_to_joint_bone, joint_bone]
+            jbone_name = joint_info.get_name()
+            jbone_head = joint_info.get_initial_bonehead()
+            jbone_tail = joint_info.get_initial_bonetail()
+            joint_bone = BoneInfo(jbone_name, parent_bone_name, jbone_head, jbone_tail, True)
+            joint_bones.append(joint_bone)
+            parent_bone_name = jbone_name
+
+        # Create a bone dedicated to this body
+        # Not strictly neccessary - but this way there is an entry in blender for every Body, which is intuitive
+        self._end_bone_name = "to_" + self.get_name()
+        if JointInfo.JBP == "PRE":
+            bone_tail = own_origin
+            bone_head = own_origin - np.array([JointInfo.JBL, 0, 0])
+        else:
+            bone_tail = own_origin + np.array([JointInfo.JBL, 0, 0])
+            bone_head = own_origin
+        body_bone = BoneInfo(self._end_bone_name, parent_bone_name, own_origin, bone_tail, False)
+
+        return [*joint_bones, body_bone]
+
 
 class Scene:
     def __init__(self):
@@ -681,8 +682,8 @@ class Scene:
 
     def create_all_bones(self):
         # each body has one or more bones:
-        # - a bone going from parent body's joint bone tail to this body's pos (a kind of "remainder bone")
         # - a bone for each joint, at the joint pos, with bone y == joint axis
+        # - a bone near it's origin to represent the body
         all_bones = []
         for body in self.bodies:
             all_bones += body.create_bones()
@@ -751,15 +752,12 @@ def parse_mujoco_xml(filepath, blenderclass):
         else:
             print("-" * depth + body_name)
 
-        n_joints = len(body.findall("joint"))
-        if n_joints > 1:
-            raise ValueError("Body {} has more than one joint. This is not supported as it doesn't translate well to bone hierarchies".format(body_name))
         for joint in body.findall("joint"):
             joint_name = joint.get("name", "unnamed_joint")
             joint_axis = np.array([float(x) for x in joint.get("axis", "0 0 1").split()])
             joint_pos = np.array([float(x) for x in joint.get("pos", "0 0 0").split()])
             joint_info = JointInfo(joint_name, body_info, parent_body, joint_axis, joint_pos)
-            body_info.set_joint(joint_info)
+            body_info.add_joint(joint_info)
             joints.append(joint_info)
 
         # add geometries (meshes only for now)
@@ -802,7 +800,8 @@ if BLENDER:
             armature = bpy.context.object
             armature.name = "MuJoCo_Armature"
             # move armature origin to the first freejoint position
-            armature.location = scene.get_freejoint_pose().origin()
+            if not JointInfo.ADD_FREEJOINT_BONE:
+                armature.location = scene.get_freejoint_pose().origin()
 
             bpy.ops.object.mode_set(mode='EDIT')
             edit_bones = armature.data.edit_bones
@@ -823,10 +822,10 @@ if BLENDER:
             all_bones = scene.create_all_bones()
             for bone_info in all_bones:
                 bone = edit_bones.new(bone_info.name())
-                bone.head = bone_info.head()
-                bone.tail = bone_info.tail()
                 if bone_info.parent_bone_name() is not None:
                     bone.parent = bone_dict[bone_info.parent_bone_name()]
+                bone.head = bone_info.head()
+                bone.tail = bone_info.tail()
                 self.report({'INFO'}, "Created Bone: {} (p: {})".format(bone_info.name(), bone_info.parent_bone_name()))
 
                 # Store bone in the dictionary
