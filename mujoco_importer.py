@@ -563,8 +563,8 @@ class BodyInfo:
         if self._parent is not None:
             tf_parent_in_armature = self._parent.get_initial_tf_in_armature()
         body_in_armature = tf_parent_in_armature * self._body_in_parent_tf
-        if self._parent is not None and self._parent.get_parent() is None:
-            body_in_armature = Transform() # root bodies at armature origin
+        # if self._parent is not None and self._parent.get_parent() is None:
+        #     body_in_armature = Transform() # root bodies at armature origin
         self._initial_tf_in_armature = body_in_armature
         # infer depth
         self._depth = 0
