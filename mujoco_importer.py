@@ -742,6 +742,11 @@ def parse_mujoco_xml(filepath, blenderclass):
         body_pos = np.array([float(x) for x in body.get("pos", "0 0 0").split()])
         body_wxyz = np.array([float(x) for x in body.get("quat", "1 0 0 0").split()])
         qw, qx, qy, qz = body_wxyz
+        # convert the quaternion to unit quaternion
+        qw = qw / np.linalg.norm(body_wxyz)
+        qx = qx / np.linalg.norm(body_wxyz)
+        qy = qy / np.linalg.norm(body_wxyz)
+        qz = qz / np.linalg.norm(body_wxyz)
         body_in_parent = Transform(origin=body_pos, quaternion=Quaternion(qx, qy, qz, qw))
         body_info = BodyInfo(body_name, parent_body, body_in_parent)
         bodies.append(body_info)
