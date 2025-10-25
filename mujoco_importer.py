@@ -563,8 +563,8 @@ class BodyInfo:
         if self._parent is not None:
             tf_parent_in_armature = self._parent.get_initial_tf_in_armature()
         body_in_armature = tf_parent_in_armature * self._body_in_parent_tf
-        if self._parent is not None and self._parent.get_parent() is None:
-            body_in_armature = Transform() # root bodies at armature origin
+        # if self._parent is not None and self._parent.get_parent() is None:
+        #     body_in_armature = Transform() # root bodies at armature origin
         self._initial_tf_in_armature = body_in_armature
         # infer depth
         self._depth = 0
@@ -742,6 +742,11 @@ def parse_mujoco_xml(filepath, blenderclass):
         body_pos = np.array([float(x) for x in body.get("pos", "0 0 0").split()])
         body_wxyz = np.array([float(x) for x in body.get("quat", "1 0 0 0").split()])
         qw, qx, qy, qz = body_wxyz
+        # convert the quaternion to unit quaternion
+        qw = qw / np.linalg.norm(body_wxyz)
+        qx = qx / np.linalg.norm(body_wxyz)
+        qy = qy / np.linalg.norm(body_wxyz)
+        qz = qz / np.linalg.norm(body_wxyz)
         body_in_parent = Transform(origin=body_pos, quaternion=Quaternion(qx, qy, qz, qw))
         body_info = BodyInfo(body_name, parent_body, body_in_parent)
         bodies.append(body_info)
